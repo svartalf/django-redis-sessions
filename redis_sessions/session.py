@@ -8,28 +8,47 @@ class SessionStore(SessionBase):
     """
     Implements Redis database session store.
     """
+
     def __init__(self, session_key=None):
         super(SessionStore, self).__init__(session_key)
-        
-        try:
-            unix_socket_path=getattr(settings, 'SESSION_REDIS_UNIX_DOMAIN_SOCKET_PATH', None)
-        except AttributeError:
-            unix_socket_path = None
-        
-        if unix_socket_path is None:
-            self.server = redis.StrictRedis(
-                host=getattr(settings, 'SESSION_REDIS_HOST', 'localhost'),
-                port=getattr(settings, 'SESSION_REDIS_PORT', 6379),
-                db=getattr(settings, 'SESSION_REDIS_DB', 0),
-                password=getattr(settings, 'SESSION_REDIS_PASSWORD', None),
-            )
+
+        if hasattr(settings, 'SESSION_REDIS'):
+            # Dict config settings
+
+            kwargs = {
+                'port': settings.SESSION_REDIS.get('PORT', 6379),
+                'db': settings.SESSION_REDIS.get('DB', 0),
+                'password': settings.SESSION_REDIS.get('PASSWORD'),
+            }
+
+            host = settings.SESSION_REDIS.get('HOST', '')
+            if host.startswith('/'):
+                # Assume an unix socket path
+                kwargs['unix_socket_path'] = host
+            else:
+                kwargs['host'] = host
+
+            self._key_prefix = settings.SESSION_REDIS.get('PREFIX', '')
+
         else:
-            self.server = redis.StrictRedis(
-                unix_socket_path=getattr(settings, 'SESSION_REDIS_UNIX_DOMAIN_SOCKET_PATH', '/var/run/redis/redis.sock'),
-                db=getattr(settings, 'SESSION_REDIS_DB', 0),
-                password=getattr(settings, 'SESSION_REDIS_PASSWORD', None),
-            )
-        
+            # Legacy style settings
+
+            kwargs = {
+                'port': getattr(settings, 'SESSION_REDIS_PORT', 6379),
+                'db': getattr(settings, 'SESSION_REDIS_DB', 0),
+                'password': getattr(settings, 'SESSION_REDIS_PASSWORD', ''),
+            }
+
+            unix_socket_path = getattr(settings, 'SESSION_REDIS_UNIX_DOMAIN_SOCKET_PATH', None)
+            if unix_socket_path is None:
+                kwargs['host'] = getattr(settings, 'SESSION_REDIS_HOST', 'localhost')
+            else:
+                kwargs['unix_socket_path'] = getattr(settings, 'SESSION_REDIS_UNIX_DOMAIN_SOCKET_PATH', '/var/run/redis/redis.sock')
+
+            self._key_prefix = getattr(settings, 'SESSION_REDIS_PREFIX', '')
+
+        self.server = redis.StrictRedis(**kwargs)
+
     def load(self):
         try:
             session_data = self.server.get(self.get_real_stored_key(self._get_or_create_session_key()))
@@ -76,7 +95,7 @@ class SessionStore(SessionBase):
         """Return the real key name in redis storage
         @return string
         """
-        prefix = getattr(settings, 'SESSION_REDIS_PREFIX', '')
-        if not prefix:
+
+        if not self._key_prefix:
             return session_key
-        return ':'.join([prefix, session_key])
+        return ':'.join([self._key_prefix, session_key])
